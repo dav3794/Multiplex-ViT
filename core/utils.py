@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torchvision.transforms import RandomResizedCrop
 from torch.utils.data import Dataset
 from glob import glob
+from cv2 import medianBlur
 from typing import Tuple, List
 
 
@@ -22,21 +23,35 @@ class DatasetFromTIFF(Dataset):
         return np.arcsinh(img / 5.0)
     
     @staticmethod
+    def denoise(img):
+        denoised_channels = [
+            medianBlur(img[i].astype('float32'), 3) 
+            for i in range(img.shape[0])
+        ]
+        return np.stack(denoised_channels)
+
+    @staticmethod
     def norm_minmax(img):
         min_val = np.min(img, axis=(1,2), keepdims=True)
         max_val = np.max(img, axis=(1,2), keepdims=True)
-        scaled_img = (img - min_val) / (max_val - min_val)
+        scaled_img = np.where(
+            max_val == min_val,
+            img,
+            (img - min_val) / (max_val - min_val + 1e-8)
+        )
         return torch.tensor(scaled_img)
 
     def __len__(self):
         return len(self.imgs)
 
     def __getitem__(self, idx):
-        img = tifffile.imread(self.imgs[idx])
+        img = tifffile.imread(self.imgs[idx])   
         img = self.preprocess(img)
-        img = self.norm_minmax(img)
         if self.transform:
-            img = self.transform(img)
+            img = self.transform(torch.tensor(img)).numpy()
+        img = self.denoise(img)
+        img = self.norm_minmax(img)
+        
         channel_ids = torch.arange(img.shape[0], dtype=torch.long)
         return img, channel_ids
 
@@ -52,7 +67,7 @@ def plot_markers(image: np.ndarray, marker_names: dict[int:str], cmap: str = 'CM
     """
     fig, axs = plt.subplots(8, 5, figsize=(12, 20))
     for i, ax in enumerate(axs.flat):
-        ax.imshow(image[i], cmap=cmap)
+        ax.imshow(image[i], cmap=cmap, vmin=0, vmax=1)
         ax.axis('off')
         ax.set_title(marker_names[i])
     plt.tight_layout()
